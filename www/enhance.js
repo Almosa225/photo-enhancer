@@ -1,18 +1,9 @@
 // Automatic photo enhancement: white balance, chroma denoise, local tone (HDR-like),
 // clarity, fine sharpening, levels + S-curve, vibrance. Works on RGBA Uint8ClampedArray in place.
+// Memory-lean: blurs run in place with one shared scratch buffer (iPhone Safari has tight limits).
 (function (global) {
   'use strict';
 
-  // separable box blur, `passes` times (3 passes ~ gaussian)
-  function boxBlur(src, w, h, r, passes) {
-    if (r < 1) return Float32Array.from(src);
-    let a = Float32Array.from(src), b = new Float32Array(src.length);
-    for (let p = 0; p < passes; p++) {
-      blurH(a, b, w, h, r);
-      blurV(b, a, w, h, r);
-    }
-    return a;
-  }
   function blurH(s, d, w, h, r) {
     const inv = 1 / (2 * r + 1);
     for (let y = 0; y < h; y++) {
@@ -36,6 +27,12 @@
       }
     }
   }
+  // in-place separable box blur, `passes` times (3 passes ~ gaussian); tmp must be same length
+  function blurInPlace(a, w, h, r, passes, tmp) {
+    if (r < 1) return a;
+    for (let p = 0; p < passes; p++) { blurH(a, tmp, w, h, r); blurV(tmp, a, w, h, r); }
+    return a;
+  }
 
   function percentile(arr, q, step) {
     const hist = new Uint32Array(1024); let n = 0;
@@ -44,66 +41,81 @@
     for (let i = 0; i < 1024; i++) { acc += hist[i]; if (acc >= t) return i / 1023; }
     return 1;
   }
+  function channelPercentile(px, ch, q, step4) {
+    const hist = new Uint32Array(256); let n = 0;
+    for (let j = ch; j < px.length; j += step4) { hist[px[j]]++; n++; }
+    const t = n * q; let acc = 0;
+    for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc >= t) return i / 255; }
+    return 1;
+  }
 
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
   async function enhance(px, w, h, onStep, opts) {
     opts = Object.assign({ clarity: 0.5, sharpen: 0.85, denoise: true }, opts || {});
-    const n = w * h, step = Math.max(1, Math.floor(n / 300000));
+    const n = w * h, step = Math.max(1, Math.floor(n / 300000)), step4 = step * 4;
     const tick = async (label, p) => { if (onStep) await onStep(label, p); };
 
-    // ---- 1. white balance (gray world + white patch, gentle) ----
+    // ---- 1. white balance gains (gray world + white patch, gentle), from samples ----
     await tick('نوازن الألوان…', 0.05);
-    let sr = 0, sg = 0, sb = 0, cnt = 0;
-    let R = new Float32Array(n), G = new Float32Array(n), B = new Float32Array(n);
-    for (let i = 0, j = 0; i < n; i++, j += 4) { R[i] = px[j] / 255; G[i] = px[j + 1] / 255; B[i] = px[j + 2] / 255; }
-    for (let i = 0; i < n; i += step) {
-      const y = 0.299 * R[i] + 0.587 * G[i] + 0.114 * B[i];
-      if (y > 0.06 && y < 0.94) { sr += R[i]; sg += G[i]; sb += B[i]; cnt++; }
-    }
-    if (cnt > 100) {
-      const m = (sr + sg + sb) / 3;
-      const pr = percentile(R, 0.995, step), pg = percentile(G, 0.995, step), pb = percentile(B, 0.995, step);
-      const pm = Math.max(pr, pg, pb);
-      const gain = (gw, wp) => clamp(1 + 0.3 * ((0.25 * gw + 0.75 * wp) - 1), 0.95, 1.06);
-      let gr = gain(m / sr, pm / pr), gg = gain(m / sg, pm / pg), gb = gain(m / sb, pm / pb);
-      const norm = 0.299 * gr + 0.587 * gg + 0.114 * gb;
-      gr /= norm; gg /= norm; gb /= norm;
-      for (let i = 0; i < n; i++) { R[i] *= gr; G[i] *= gg; B[i] *= gb; }
+    let gr = 1, gg = 1, gb = 1;
+    {
+      let sr = 0, sg = 0, sb = 0, cnt = 0;
+      for (let j = 0; j < px.length; j += step4) {
+        const r = px[j] / 255, g = px[j + 1] / 255, b = px[j + 2] / 255;
+        const y = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (y > 0.06 && y < 0.94) { sr += r; sg += g; sb += b; cnt++; }
+      }
+      if (cnt > 100) {
+        const m = (sr + sg + sb) / 3;
+        const pr = channelPercentile(px, 0, 0.995, step4), pg = channelPercentile(px, 1, 0.995, step4), pb = channelPercentile(px, 2, 0.995, step4);
+        const pm = Math.max(pr, pg, pb);
+        const gain = (gw, wp) => clamp(1 + 0.3 * ((0.25 * gw + 0.75 * wp) - 1), 0.95, 1.06);
+        gr = gain(m / sr, pm / pr); gg = gain(m / sg, pm / pg); gb = gain(m / sb, pm / pb);
+        const norm = 0.299 * gr + 0.587 * gg + 0.114 * gb;
+        gr /= norm; gg /= norm; gb /= norm;
+      }
     }
 
-    // ---- 2. to Y / chroma, chroma denoise ----
+    // ---- 2. straight to Y / chroma (white balance applied on the fly), chroma denoise ----
     await tick('ننظف التشويش…', 0.18);
-    const Y = new Float32Array(n); let Cb = new Float32Array(n), Cr = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      const y = 0.299 * R[i] + 0.587 * G[i] + 0.114 * B[i];
-      Y[i] = clamp(y, 0, 1); Cb[i] = B[i] - y; Cr[i] = R[i] - y;
+    const Y = new Float32Array(n), Cb = new Float32Array(n), Cr = new Float32Array(n);
+    const tmp = new Float32Array(n);
+    {
+      const kr = gr / 255, kg = gg / 255, kb = gb / 255;
+      for (let i = 0, j = 0; i < n; i++, j += 4) {
+        const r = px[j] * kr, g = px[j + 1] * kg, b = px[j + 2] * kb;
+        const y = 0.299 * r + 0.587 * g + 0.114 * b;
+        Y[i] = clamp(y, 0, 1); Cb[i] = b - y; Cr[i] = r - y;
+      }
     }
-    R = G = B = null; // free memory early (phones)
     const rc = Math.max(1, Math.round(Math.min(w, h) / 900));
-    const CbS = boxBlur(Cb, w, h, rc, 2); Cb = null;
-    const CrS = boxBlur(Cr, w, h, rc, 2); Cr = null;
-    // light luma denoise only where flat (keeps edges)
-    if (opts.denoise) { const Yd = boxBlur(Y, w, h, 1, 1); for (let i = 0; i < n; i++) {
-      const d = Math.abs(Y[i] - Yd[i]);
-      const k = d < 0.02 ? 0.5 : d < 0.05 ? 0.5 * (0.05 - d) / 0.03 : 0;
-      Y[i] = Y[i] + (Yd[i] - Y[i]) * k;
-    } }
-    const Y0 = Float32Array.from(Y);
+    blurInPlace(Cb, w, h, rc, 2, tmp);
+    blurInPlace(Cr, w, h, rc, 2, tmp);
+    let work = new Float32Array(n); // reused for every luma blur below
+    if (opts.denoise) {
+      work.set(Y); blurInPlace(work, w, h, 1, 1, tmp);
+      for (let i = 0; i < n; i++) {
+        const d = Math.abs(Y[i] - work[i]);
+        const k = d < 0.02 ? 0.5 : d < 0.05 ? 0.5 * (0.05 - d) / 0.03 : 0;
+        Y[i] = Y[i] + (work[i] - Y[i]) * k;
+      }
+    }
+    const Y0 = new Uint16Array(n); // original luma, compact (only needed for chroma scaling at the end)
+    for (let i = 0; i < n; i++) Y0[i] = Y[i] * 65535;
 
     // ---- 3. local tone mapping (HDR-like): local gamma from blurred base ----
     await tick('نوازن الإضاءة…', 0.32);
     const f = Math.max(1, Math.round(Math.min(w, h) / 160));
     const sw = Math.ceil(w / f), sh = Math.ceil(h / f);
-    const small = new Float32Array(sw * sh), sc = new Float32Array(sw * sh);
+    const base = new Float32Array(sw * sh), sc = new Float32Array(sw * sh);
     for (let y = 0; y < h; y++) {
       const sy = (y / f) | 0;
-      for (let x = 0; x < w; x++) { const k = sy * sw + ((x / f) | 0); small[k] += Y[y * w + x]; sc[k]++; }
+      for (let x = 0; x < w; x++) { const k = sy * sw + ((x / f) | 0); base[k] += Y[y * w + x]; sc[k]++; }
     }
-    for (let k = 0; k < small.length; k++) small[k] /= sc[k];
-    const base = boxBlur(small, sw, sh, Math.max(2, Math.round(Math.min(sw, sh) * 0.06)), 3);
+    for (let k = 0; k < base.length; k++) base[k] /= sc[k];
+    blurInPlace(base, sw, sh, Math.max(2, Math.round(Math.min(sw, sh) * 0.06)), 3, sc);
     const hiP = percentile(Y, 0.995, step); // bright parts present => low-key scene, lift gently
-    const meanY = (() => { let s = 0, c = 0; for (let i = 0; i < n; i += step) { s += Y[i]; c++; } return s / c; })();
     const toneK = hiP > 0.8 ? 0.4 : 0.7;
     for (let y = 0; y < h; y++) {
       const fy = Math.min(sh - 1.001, Math.max(0, (y + 0.5) / f - 0.5)), y0 = fy | 0, ty = fy - y0;
@@ -125,20 +137,21 @@
     // ---- 4. clarity (mid-frequency local contrast, midtones) ----
     await tick('نبرز التفاصيل…', 0.5);
     const rClar = Math.max(3, Math.round(Math.min(w, h) * 0.012));
-    const Yc = boxBlur(Y, w, h, rClar, 3);
+    work.set(Y); blurInPlace(work, w, h, rClar, 3, tmp);
     for (let i = 0; i < n; i++) {
       const y = Y[i], mid = 4 * y * (1 - y);
-      Y[i] = y + opts.clarity * (y - Yc[i]) * mid;
+      Y[i] = y + opts.clarity * (y - work[i]) * mid;
     }
 
     // ---- 5. fine sharpening with noise threshold ----
     await tick('نزيد الحدة…', 0.64);
     const rS = Math.max(1, Math.round(Math.min(w, h) / 1500));
-    const Ys = boxBlur(Y, w, h, rS, 2);
+    work.set(Y); blurInPlace(work, w, h, rS, 2, tmp);
     for (let i = 0; i < n; i++) {
-      const d = Y[i] - Ys[i], ad = d < 0 ? -d : d;
+      const d = Y[i] - work[i], ad = d < 0 ? -d : d;
       if (ad > 0.006) Y[i] += opts.sharpen * d * Math.min(1, (ad - 0.006) / 0.01);
     }
+    work = null;
 
     // ---- 6. levels + S-curve ----
     await tick('نضبط التباين…', 0.76);
@@ -154,9 +167,9 @@
     await tick('نخلي الألوان حية…', 0.88);
     for (let i = 0, j = 0; i < n; i++, j += 4) {
       const y = Y[i];
-      const ratio = (y + 0.05) / (Y0[i] + 0.05);
-      let cs = clamp(Math.sqrt(ratio), 1.0, 1.6);
-      let cb = CbS[i] * cs, cr = CrS[i] * cs;
+      const ratio = (y + 0.05) / (Y0[i] / 65535 + 0.05);
+      const cs = clamp(Math.sqrt(ratio), 1.0, 1.6);
+      let cb = Cb[i] * cs, cr = Cr[i] * cs;
       const s = Math.sqrt(cb * cb + cr * cr);
       const vib = 1.06 + 0.42 * (1 - Math.min(1, s / 0.3)) * Math.min(1, y * 6);
       cb *= vib; cr *= vib;

@@ -101,7 +101,7 @@
     <label class="pick" id="drop">
       <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="#9aa1ad" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="M21 15l-5-5L5 21"/></svg>
       <b>اختر صورة</b>
-      <span>نكبّرها لدقة 8K ونضبط الألوان والوضوح تلقائياً</span>
+      <span>الذكاء الاصطناعي يوضّحها ويضبط ألوانها تلقائياً</span>
       <input type="file" id="file" accept="image/*">
     </label>
   </section>
@@ -146,23 +146,24 @@
   const $ = id => document.getElementById(id);
   const TARGET_LONG = 7680;   // 8K
   const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const AI_MAX_INPUT = IS_IOS ? 896 : 1024;  // longest side fed to Real-ESRGAN (x4)
-  const AI_SKIP_ABOVE = 1200; // camera photos already have the pixels: enhance them directly
-  const MAX_WORK_PIXELS = 12e6;
+  // If the last run never finished (the browser killed the page for memory), use a lighter size.
+  // Each time that happens we step down one level and remember it.
+  let level = 0;
+  try {
+    level = parseInt(localStorage.getItem('pe_level') || '0', 10) || 0;
+    if (localStorage.getItem('pe_busy') === '1') { level = Math.min(level + 1, 2); localStorage.setItem('pe_level', String(level)); }
+    localStorage.removeItem('pe_busy');
+  } catch (e) {}
+  const AI_MAX_INPUT = (IS_IOS ? [896, 768, 640] : [1024, 896, 768])[level]; // longest side fed to Real-ESRGAN (x4)
+  const MAX_OUT_AREA = IS_IOS ? 9.5e6 : 7680 * 4320;  // iPhone: no 8K stretch (adds no detail, only memory)
+  const markBusy = on => { try { on ? localStorage.setItem('pe_busy', '1') : localStorage.removeItem('pe_busy'); } catch (e) {} };
+  try {
+    tf.env().set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0); // free GPU memory right away
+    if (IS_IOS) tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
+  } catch (e) {}
 
-  let upscaler = null, resultBlob = null, beforeURL = null, afterURL = null, busy = false;
+  let resultBlob = null, beforeURL = null, afterURL = null, busy = false;
 
-  function getUpscaler() {
-    if (!upscaler) {
-      const M = window.ESRGAN_X4, bin = atob(M.weights), bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const handler = tf.io.fromMemory({ modelTopology: M.topology, weightSpecs: M.specs, weightData: bytes.buffer });
-      const model = Object.assign({}, window.ESRGANMedium4x, { path: handler });
-      upscaler = new Upscaler({ model });
-    }
-    return upscaler;
-  }
-  // warm the model in the background so the first photo starts faster
   setTimeout(() => { try { RealESRGAN.load(); } catch (e) {} }, 400);
 
   const show = which => {
@@ -270,11 +271,16 @@
   }
 
   function targetSize(w, h) {
+    if (IS_IOS) { // keep the AI's own resolution on iPhone
+      if (w * h <= MAX_OUT_AREA) return [w, h];
+      const k = Math.sqrt(MAX_OUT_AREA / (w * h)); return [Math.round(w * k), Math.round(h * k)];
+    }
     let s = TARGET_LONG / Math.max(w, h);
     let tw = Math.round(w*s), th = Math.round(h*s);
-    const MAX_AREA = 7680 * 4320;
+    const MAX_AREA = MAX_OUT_AREA;
+    if (tw * th < w * h) { tw = w; th = h; }
     if (tw * th > MAX_AREA) { const k = Math.sqrt(MAX_AREA / (tw * th)); tw = Math.round(tw*k); th = Math.round(th*k); }
-    for (let i = 0; i < 12 && !canvasWorks(tw, th); i++) { tw = Math.round(tw*0.85); th = Math.round(th*0.85); }
+    for (let i = 0; i < 12 && !IS_IOS && !canvasWorks(tw, th); i++) { tw = Math.round(tw*0.85); th = Math.round(th*0.85); }
     return [tw, th];
   }
 
@@ -288,13 +294,12 @@
     if (busy || !file) return;
     if (!/^image\//.test(file.type) && !/\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i.test(file.name)) return;
     busy = true;
-    if (beforeURL) URL.revokeObjectURL(beforeURL);
-    beforeURL = URL.createObjectURL(file);
-    $('thumb').src = beforeURL;
+    markBusy(true);
+    $('thumb').removeAttribute('src');
     show('work'); setStage('نجهّز الصورة…', 0.02); await frame();
 
     try {
-      const img = await loadImage(file);
+      let img = await loadImage(file);
       const W0 = img.width, H0 = img.height, L0 = Math.max(W0, H0);
       let base;
 
@@ -302,6 +307,15 @@
       // then the AI redraws them x4 with clean, sharp detail.
       const s = Math.min(1, AI_MAX_INPUT / L0);
       const input = drawScaled(img, Math.round(W0*s), Math.round(H0*s));
+      // small copy of the original for the thumbnail and the "before" view (keeps memory low)
+      const bs = Math.min(1, 1400 / L0);
+      const beforeC = drawScaled(img, Math.round(W0*bs), Math.round(H0*bs));
+      if (img.close) img.close(); img = null;
+      const beforeBlob = await new Promise(res => beforeC.toBlob(res, 'image/jpeg', 0.9));
+      beforeC.width = beforeC.height = 0;
+      if (beforeURL) URL.revokeObjectURL(beforeURL);
+      beforeURL = URL.createObjectURL(beforeBlob);
+      $('thumb').src = beforeURL;
       setStage('نجهّز الذكاء الاصطناعي…', 0.04); await frame();
       RealESRGAN.load();
       setStage('الذكاء الاصطناعي يعيد رسم التفاصيل… 0%', 0.06); await frame();
@@ -314,12 +328,10 @@
         await PhotoEnhance.enhance(d.data, base.width, base.height, async (label, p) => { setStage(label, p0 + p * (0.9 - p0)); await frame(); }, { clarity: 0.3, sharpen: 0.25, denoise: false });
         ctx.putImageData(d, 0, 0);
       }
-      if (img.close) img.close();
-
-      setStage('نكبّر لدقة 8K…', 0.92); await frame();
+      setStage(IS_IOS ? 'نجهّز الدقة النهائية…' : 'نكبّر لدقة 8K…', 0.92); await frame();
       const [tw, th] = targetSize(base.width, base.height);
-      const out = drawScaled(base, tw, th);
-      base.width = base.height = 0;
+      let out = base;
+      if (tw !== base.width || th !== base.height) { out = drawScaled(base, tw, th); base.width = base.height = 0; }
 
       setStage('نجهّز الصورة النهائية…', 0.97); await frame();
       resultBlob = await new Promise(res => out.toBlob(res, 'image/jpeg', 0.92));
@@ -335,9 +347,11 @@
       $('sAfter').innerHTML = b.tag + '<small style="color:#9aa1ad;font-size:12px;margin-top:2px">' + b.size + '</small>';
       $('msg').textContent = ''; $('msg').className = 'msg';
       setStage('تم ✨', 1);
+      markBusy(false);
       show('result');
     } catch (e) {
       console.error(e);
+      markBusy(false);
       show('pick');
       $('file').value = '';
       alertBox('ما قدرنا نحسّن هذي الصورة. جرّب صورة ثانية أو صورة أصغر.');
@@ -347,7 +361,7 @@
   function alertBox(t) {
     let el = document.querySelector('.pick span');
     el.textContent = t; el.classList.add('err');
-    setTimeout(() => { el.textContent = 'نكبّرها لدقة 8K ونضبط الألوان والوضوح تلقائياً'; el.classList.remove('err'); }, 5000);
+    setTimeout(() => { el.textContent = 'الذكاء الاصطناعي يوضّحها ويضبط ألوانها تلقائياً'; el.classList.remove('err'); }, 5000);
   }
 
   // pick / drop

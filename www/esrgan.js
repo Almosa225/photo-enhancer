@@ -45,7 +45,8 @@
   async function upscale(srcCanvas, onProgress) {
     load();
     const w = srcCanvas.width, h = srcCanvas.height, S = 4;
-    const TILE = 128, PAD = 12;
+    const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const TILE = IOS ? 96 : 128, PAD = 10;
     const sctx = srcCanvas.getContext('2d', { willReadFrequently: true });
     const out = document.createElement('canvas');
     out.width = w * S; out.height = h * S;
