@@ -57,17 +57,17 @@
   .hint{color:var(--mute);font-size:13px}
 
   .result{display:none;flex-direction:column;gap:14px}
-  .viewer{position:relative;border-radius:16px;overflow:hidden;background:#000;user-select:none;-webkit-user-select:none;touch-action:pan-y}
-  .viewer img{display:block;width:100%;height:auto}
-  .viewer .before{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .15s;pointer-events:none}
-  .viewer.show-before .before{opacity:1}
+  .viewer{position:relative;border-radius:16px;overflow:hidden;background:#000;user-select:none;-webkit-user-select:none;touch-action:none;cursor:ew-resize;direction:ltr;--pos:50%}
+  .viewer img{display:block;width:100%;height:auto;pointer-events:none}
+  .viewer .before{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;clip-path:inset(0 calc(100% - var(--pos)) 0 0)}
+  .handle{position:absolute;top:0;bottom:0;left:var(--pos);width:2px;margin-left:-1px;background:#fff;box-shadow:0 0 8px #0008;pointer-events:none}
+  .handle::after{content:"";position:absolute;top:50%;left:50%;width:38px;height:38px;margin:-19px 0 0 -19px;border-radius:50%;background:#fff;box-shadow:0 2px 10px #0006;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6l-6 6 6 6M15 6l6 6-6 6'/%3E%3C/svg%3E");background-size:22px;background-repeat:no-repeat;background-position:center}
   .tag{
-    position:absolute;top:10px;right:10px;background:#000a;backdrop-filter:blur(6px);
+    position:absolute;top:10px;right:10px;pointer-events:none;background:#000a;backdrop-filter:blur(6px);
     padding:5px 10px;border-radius:99px;font-size:13px;font-weight:700
   }
-  .tag.b{display:none}
-  .viewer.show-before .tag.a{display:none}
-  .viewer.show-before .tag.b{display:block}
+  .tag.b{right:auto;left:10px}
   .compare{text-align:center;color:var(--mute);font-size:13px}
   .stats{display:flex;gap:10px}
   .stat{flex:1;background:#0f1115;border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center}
@@ -112,10 +112,11 @@
     <div class="viewer" id="viewer">
       <img id="after" alt="الصورة بعد التحسين">
       <img id="before" class="before" alt="الصورة الأصلية">
+      <div class="handle"></div>
       <span class="tag a">بعد ✨</span>
       <span class="tag b">قبل</span>
     </div>
-    <div class="compare">اضغط على الصورة عشان تقارن بين قبل وبعد</div>
+    <div class="compare">اسحب الخط عشان تقارن بين قبل وبعد</div>
     <div class="stats">
       <div class="stat"><small>الأصلية</small><b id="sBefore">—</b></div>
       <div class="stat"><small>بعد التحسين</small><b class="big" id="sAfter">—</b></div>
@@ -133,12 +134,14 @@
 <script src="lib/esrgan-medium-x4.min.js"></script>
 <script src="lib/model-x4.js"></script>
 <script src="native.js"></script>
+<script src="enhance.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
   const TARGET_LONG = 7680;   // 8K
   const AI_MAX_INPUT = 800;   // longest side fed to the AI model (x4 -> 3200)
-  const AI_SKIP_ABOVE = 2400; // big photos already have detail: skip AI, just enhance
+  const AI_SKIP_ABOVE = 1200; // camera photos already have the pixels: enhance them directly
+  const MAX_WORK_PIXELS = 12e6;
 
   let upscaler = null, resultBlob = null, beforeURL = null, afterURL = null, busy = false;
 
@@ -288,7 +291,9 @@
       const W0 = img.width, H0 = img.height, L0 = Math.max(W0, H0);
       let base;
 
+      let p0;
       if (L0 < AI_SKIP_ABOVE) {
+        // small image: AI upscaling first so there are real pixels to work with
         const s = Math.min(1, AI_MAX_INPUT / L0);
         const input = drawScaled(img, Math.round(W0*s), Math.round(H0*s));
         setStage('نحمّل الذكاء الاصطناعي…', 0.05); await frame();
@@ -296,20 +301,22 @@
         setStage('الذكاء الاصطناعي يعيد رسم التفاصيل…', 0.08);
         const t = await up.upscale(input, {
           output: 'tensor', patchSize: 128, padding: 8, awaitNextFrame: true,
-          progress: pr => setStage(pr >= 0.999 ? 'نكمل اللمسات الأخيرة…' : 'الذكاء الاصطناعي يعيد رسم التفاصيل… ' + Math.round(pr*100) + '%', 0.08 + pr*0.72)
+          progress: pr => setStage(pr >= 0.999 ? 'نكمل اللمسات الأخيرة…' : 'الذكاء الاصطناعي يعيد رسم التفاصيل… ' + Math.round(pr*100) + '%', 0.08 + pr*0.5)
         });
         base = await tensorToCanvas(t);
         input.width = input.height = 0;
-        setStage('نضبط الألوان والتباين…', 0.82); await frame();
-        autoColor(base);
-        setStage('نزيد الوضوح…', 0.88); await frame();
-        sharpen(base, 0.35);
+        p0 = 0.6;
       } else {
-        base = drawScaled(img, W0, H0);
-        setStage('نضبط الألوان والتباين…', 0.4); await frame();
-        autoColor(base);
-        setStage('نزيد الوضوح…', 0.6); await frame();
-        sharpen(base, 0.6);
+        // camera photo: work at full detail (capped to keep phone memory safe)
+        const s = Math.min(1, Math.sqrt(MAX_WORK_PIXELS / (W0 * H0)));
+        base = drawScaled(img, Math.round(W0*s), Math.round(H0*s));
+        p0 = 0.04;
+      }
+      {
+        const ctx = base.getContext('2d', { willReadFrequently: true });
+        const d = ctx.getImageData(0, 0, base.width, base.height);
+        await PhotoEnhance.enhance(d.data, base.width, base.height, async (label, p) => { setStage(label, p0 + p * (0.9 - p0)); await frame(); });
+        ctx.putImageData(d, 0, 0);
       }
       if (img.close) img.close();
 
@@ -325,7 +332,7 @@
 
       if (afterURL) URL.revokeObjectURL(afterURL);
       afterURL = URL.createObjectURL(resultBlob);
-      $('after').src = afterURL; $('viewer').classList.remove('show-before');
+      $('after').src = afterURL; $('viewer').style.setProperty('--pos', '50%');
       $('before').src = beforeURL;
       const a = label(W0, H0), b = label(tw, th);
       $('sBefore').textContent = a.size;
@@ -354,9 +361,17 @@
   ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
   drop.addEventListener('drop', e => run(e.dataTransfer.files[0]));
 
-  // tap to compare before / after
+  // drag to compare before / after
   const v = $('viewer');
-  v.addEventListener('click', () => v.classList.toggle('show-before'));
+  let dragging = false;
+  const setPos = e => {
+    const r = v.getBoundingClientRect();
+    const p = Math.min(100, Math.max(0, (e.clientX - r.left) / r.width * 100));
+    v.style.setProperty('--pos', p + '%');
+  };
+  v.addEventListener('pointerdown', e => { dragging = true; try { v.setPointerCapture(e.pointerId); } catch (_) {} setPos(e); });
+  v.addEventListener('pointermove', e => { if (dragging) setPos(e); });
+  ['pointerup', 'pointercancel'].forEach(ev => v.addEventListener(ev, () => { dragging = false; }));
 
   // save
   let downloads = null, dlChecked = false;
