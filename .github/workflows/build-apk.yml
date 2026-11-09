@@ -35,7 +35,18 @@ jobs:
       - name: Build APK
         run: |
           chmod +x android/gradlew
-          cd android && ./gradlew assembleDebug --no-daemon
+          cd android && ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../build.log; exit ${PIPESTATUS[0]}
+
+      - name: Save build log on failure
+        if: failure()
+        run: |
+          git config user.name "build-bot"; git config user.email "build-bot@users.noreply.github.com"
+          git checkout --orphan build-logs
+          git rm -rfq --cached . >/dev/null
+          tail -300 build.log > last-build.log
+          git add -f last-build.log
+          git commit -qm "build log"
+          git push -f origin build-logs
 
       - name: Rename
         run: cp android/app/build/outputs/apk/debug/app-debug.apk photo-enhancer.apk
