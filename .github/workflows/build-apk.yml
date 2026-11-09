@@ -35,7 +35,14 @@ jobs:
       - name: Build APK
         run: |
           chmod +x android/gradlew
-          cd android && ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../build.log; exit ${PIPESTATUS[0]}
+          cd android
+          for i in 1 2 3; do
+            ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../build.log
+            code=${PIPESTATUS[0]}
+            [ $code -eq 0 ] && break
+            echo "Attempt $i failed, retrying in 20s..."; sleep 20
+          done
+          exit $code
 
       - name: Save build log on failure
         if: failure()
