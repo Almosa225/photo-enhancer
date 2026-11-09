@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>محسّن الصور</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0c0d10; --card:#15171c; --line:#262a33; --text:#f3f4f6; --mute:#9aa1ad;
+    --accent:#7c5cff; --accent2:#22d3ee;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:radial-gradient(1200px 600px at 50% -200px,#1d1640 0%,var(--bg) 60%);
+    color:var(--text); font-family:"Tajawal",system-ui,sans-serif;
+    display:flex; justify-content:center; padding:24px 16px 40px; min-height:100%;
+  }
+  .app{width:100%; max-width:520px; display:flex; flex-direction:column; gap:20px}
+  header{text-align:center; padding-top:8px}
+  .logo{
+    width:56px;height:56px;border-radius:16px;margin:0 auto 12px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:grid;place-items:center;box-shadow:0 10px 30px #7c5cff55;
+  }
+  h1{font-size:26px;font-weight:800;letter-spacing:-.2px}
+  .sub{color:var(--mute);font-size:15px;margin-top:6px}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:18px}
+  .pick{
+    display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;
+    padding:44px 18px;border:2px dashed #343a46;border-radius:18px;cursor:pointer;
+    transition:border-color .2s, background .2s;
+  }
+  .pick:hover,.pick.drag{border-color:var(--accent);background:#7c5cff10}
+  .pick svg{opacity:.9}
+  .pick b{font-size:18px}
+  .pick span{color:var(--mute);font-size:14px}
+  .btn{
+    appearance:none;border:0;cursor:pointer;font:inherit;font-weight:700;font-size:17px;
+    color:#fff;background:linear-gradient(135deg,var(--accent),#5b8cff);
+    padding:15px 18px;border-radius:14px;width:100%;
+    box-shadow:0 8px 24px #7c5cff40;transition:transform .1s, opacity .2s;
+  }
+  .btn:active{transform:scale(.98)}
+  .btn.ghost{background:transparent;border:1px solid var(--line);box-shadow:none;color:var(--text);font-weight:500}
+  .btn[disabled]{opacity:.5;cursor:default}
+  input[type=file]{display:none}
+
+  .work{display:none;flex-direction:column;gap:16px;align-items:center;text-align:center;padding:26px 8px}
+  .thumb{width:100%;max-height:280px;object-fit:contain;border-radius:14px;filter:saturate(.6) brightness(.7)}
+  .stage{font-size:17px;font-weight:700}
+  .bar{width:100%;height:10px;background:#232730;border-radius:99px;overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .3s}
+  .hint{color:var(--mute);font-size:13px}
+
+  .result{display:none;flex-direction:column;gap:14px}
+  .viewer{position:relative;border-radius:16px;overflow:hidden;background:#000;user-select:none;-webkit-user-select:none;touch-action:pan-y}
+  .viewer img{display:block;width:100%;height:auto}
+  .viewer .before{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .15s;pointer-events:none}
+  .viewer.show-before .before{opacity:1}
+  .tag{
+    position:absolute;top:10px;right:10px;background:#000a;backdrop-filter:blur(6px);
+    padding:5px 10px;border-radius:99px;font-size:13px;font-weight:700
+  }
+  .tag.b{display:none}
+  .viewer.show-before .tag.a{display:none}
+  .viewer.show-before .tag.b{display:block}
+  .compare{text-align:center;color:var(--mute);font-size:13px}
+  .stats{display:flex;gap:10px}
+  .stat{flex:1;background:#0f1115;border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center}
+  .stat small{display:block;color:var(--mute);font-size:12px;margin-bottom:4px}
+  .stat b{font-size:15px;direction:ltr;display:inline-block}
+  .stat b.big{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent;font-size:18px}
+  .msg{font-size:14px;color:var(--mute);text-align:center;min-height:1em}
+  .err{color:#ff8a8a}
+  footer{text-align:center;color:#5f6673;font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
+    </div>
+    <h1>محسّن الصور</h1>
+    <p class="sub">اختر صورة، والباقي علينا</p>
+  </header>
+
+  <!-- Step 1: pick -->
+  <section class="card" id="pickCard">
+    <label class="pick" id="drop">
+      <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="#9aa1ad" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="M21 15l-5-5L5 21"/></svg>
+      <b>اختر صورة</b>
+      <span>نكبّرها لدقة 8K ونضبط الألوان والوضوح تلقائياً</span>
+      <input type="file" id="file" accept="image/*">
+    </label>
+  </section>
+
+  <!-- Step 2: working -->
+  <section class="card work" id="work">
+    <img class="thumb" id="thumb" alt="">
+    <div class="stage" id="stage">نجهّز الصورة…</div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="hint">التحسين يصير على جوالك نفسه، وممكن ياخذ دقيقة. خلّ الصفحة مفتوحة.</div>
+  </section>
+
+  <!-- Step 3: result -->
+  <section class="card result" id="result">
+    <div class="viewer" id="viewer">
+      <img id="after" alt="الصورة بعد التحسين">
+      <img id="before" class="before" alt="الصورة الأصلية">
+      <span class="tag a">بعد ✨</span>
+      <span class="tag b">قبل</span>
+    </div>
+    <div class="compare">اضغط على الصورة عشان تقارن بين قبل وبعد</div>
+    <div class="stats">
+      <div class="stat"><small>الأصلية</small><b id="sBefore">—</b></div>
+      <div class="stat"><small>بعد التحسين</small><b class="big" id="sAfter">—</b></div>
+    </div>
+    <button class="btn" id="save">حفظ الصورة</button>
+    <div class="msg" id="msg"></div>
+    <button class="btn ghost" id="again">صورة جديدة</button>
+  </section>
+
+  <footer>كل المعالجة تصير داخل جهازك. ما نرفع صورك لأي مكان.</footer>
+</div>
+
+<script src="lib/tf.min.js"></script>
+<script src="lib/upscaler.min.js"></script>
+<script src="lib/esrgan-medium-x4.min.js"></script>
+<script src="lib/model-x4.js"></script>
+<script src="native.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const TARGET_LONG = 7680;   // 8K
+  const AI_MAX_INPUT = 800;   // longest side fed to the AI model (x4 -> 3200)
+  const AI_SKIP_ABOVE = 2400; // big photos already have detail: skip AI, just enhance
+
+  let upscaler = null, resultBlob = null, beforeURL = null, afterURL = null, busy = false;
+
+  function getUpscaler() {
+    if (!upscaler) {
+      const M = window.ESRGAN_X4, bin = atob(M.weights), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const handler = tf.io.fromMemory({ modelTopology: M.topology, weightSpecs: M.specs, weightData: bytes.buffer });
+      const model = Object.assign({}, window.ESRGANMedium4x, { path: handler });
+      upscaler = new Upscaler({ model });
+    }
+    return upscaler;
+  }
+  // warm the model in the background so the first photo starts faster
+  setTimeout(() => { try { getUpscaler().getModel && getUpscaler().getModel().catch(()=>{}); } catch(e){} }, 300);
+
+  const show = which => {
+    $('pickCard').style.display = which === 'pick' ? '' : 'none';
+    $('work').style.display = which === 'work' ? 'flex' : 'none';
+    $('result').style.display = which === 'result' ? 'flex' : 'none';
+  };
+  const setStage = (t, p) => { $('stage').textContent = t; if (p != null) $('bar').style.width = Math.round(p*100) + '%'; };
+  const frame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
+  function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+
+  async function loadImage(file) {
+    if (window.createImageBitmap) {
+      try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) {}
+    }
+    return await new Promise((res, rej) => {
+      const img = new Image(); img.onload = () => res(img); img.onerror = rej;
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  function drawScaled(src, w, h) {
+    const c = makeCanvas(w, h), ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, w, h);
+    return c;
+  }
+
+  async function tensorToCanvas(t) {
+    const img = tf.tidy(() => {
+      let x = t.rank === 4 ? t.squeeze([0]) : t;
+      return x.clipByValue(0, 255).round().cast('int32');
+    });
+    t.dispose();
+    const [h, w] = img.shape;
+    const c = makeCanvas(w, h);
+    await tf.browser.toPixels(img, c);
+    img.dispose();
+    return c;
+  }
+
+  // automatic levels + gentle S-curve + vibrance
+  function autoColor(c) {
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const d = ctx.getImageData(0, 0, c.width, c.height), p = d.data, n = p.length;
+    const hist = new Uint32Array(256); let count = 0;
+    const step = Math.max(4, Math.floor(n / 4 / 400000) * 4);
+    for (let i = 0; i < n; i += step) {
+      hist[(p[i]*77 + p[i+1]*150 + p[i+2]*29) >> 8]++; count++;
+    }
+    const pct = q => { let acc = 0, t = count*q; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= t) return v; } return 255; };
+    let lo = Math.min(pct(0.004), 40), hi = Math.max(pct(0.996), 215);
+    if (hi - lo < 50) { lo = 0; hi = 255; }
+    let mean = 0; for (let v = 0; v < 256; v++) mean += v * hist[v]; mean = mean / count;
+    const m = Math.min(0.95, Math.max(0.05, (mean - lo) / (hi - lo)));
+    let gamma = Math.log(0.47) / Math.log(m);
+    gamma = 1 + (Math.min(1.3, Math.max(0.75, gamma)) - 1) * 0.5;
+    const K = 0.16, lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) {
+      let x = Math.min(1, Math.max(0, (v - lo) / (hi - lo)));
+      x = Math.pow(x, gamma);
+      x = x*(1-K) + K*(x*x*(3 - 2*x));
+      lut[v] = Math.round(x * 255);
+    }
+    for (let i = 0; i < n; i += 4) {
+      let r = lut[p[i]], g = lut[p[i+1]], b = lut[p[i+2]];
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      const s = (mx - mn) / 255;
+      const f = 1 + 0.32 * (1 - s) * (mx > 12 ? 1 : 0); // vibrance: boost dull colors more
+      const l = 0.299*r + 0.587*g + 0.114*b;
+      p[i]   = l + (r - l) * f;
+      p[i+1] = l + (g - l) * f;
+      p[i+2] = l + (b - l) * f;
+    }
+    ctx.putImageData(d, 0, 0);
+  }
+
+  // unsharp mask using a cheap GPU blur (downscale/upscale)
+  function sharpen(c, amount) {
+    const w = c.width, h = c.height;
+    const small = drawScaled(c, Math.max(1, Math.round(w/2.5)), Math.max(1, Math.round(h/2.5)));
+    const blur = drawScaled(small, w, h);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const d = ctx.getImageData(0, 0, w, h), p = d.data;
+    const bd = blur.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+    for (let i = 0; i < p.length; i += 4) {
+      for (let k = 0; k < 3; k++) {
+        const diff = p[i+k] - bd[i+k];
+        if (diff > 3 || diff < -3) p[i+k] = p[i+k] + diff * amount;
+      }
+    }
+    ctx.putImageData(d, 0, 0);
+    small.width = small.height = blur.width = blur.height = 0;
+  }
+
+  function canvasWorks(w, h) {
+    try {
+      const c = makeCanvas(w, h), ctx = c.getContext('2d');
+      if (!ctx) return false;
+      ctx.fillStyle = '#fff'; ctx.fillRect(w-1, h-1, 1, 1);
+      const ok = ctx.getImageData(w-1, h-1, 1, 1).data[3] === 255;
+      c.width = c.height = 0; return ok;
+    } catch (e) { return false; }
+  }
+
+  function targetSize(w, h) {
+    let s = TARGET_LONG / Math.max(w, h);
+    let tw = Math.round(w*s), th = Math.round(h*s);
+    const MAX_AREA = 7680 * 4320;
+    if (tw * th > MAX_AREA) { const k = Math.sqrt(MAX_AREA / (tw * th)); tw = Math.round(tw*k); th = Math.round(th*k); }
+    for (let i = 0; i < 12 && !canvasWorks(tw, th); i++) { tw = Math.round(tw*0.85); th = Math.round(th*0.85); }
+    return [tw, th];
+  }
+
+  const label = (w, h) => {
+    const A = w * h; // classify by pixel count so 4:3 photos at 8K pixel count still read as 8K
+    const tag = A >= 7680*4320*0.95 ? '8K' : A >= 5120*2880*0.95 ? '5K' : A >= 3840*2160*0.95 ? '4K' : A >= 2560*1440*0.95 ? '2K' : A >= 1920*1080*0.95 ? 'Full HD' : 'HD';
+    return { size: `${w} × ${h}`, tag };
+  };
+
+  async function run(file) {
+    if (busy || !file) return;
+    if (!/^image\//.test(file.type) && !/\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i.test(file.name)) return;
+    busy = true;
+    if (beforeURL) URL.revokeObjectURL(beforeURL);
+    beforeURL = URL.createObjectURL(file);
+    $('thumb').src = beforeURL;
+    show('work'); setStage('نجهّز الصورة…', 0.02); await frame();
+
+    try {
+      const img = await loadImage(file);
+      const W0 = img.width, H0 = img.height, L0 = Math.max(W0, H0);
+      let base;
+
+      if (L0 < AI_SKIP_ABOVE) {
+        const s = Math.min(1, AI_MAX_INPUT / L0);
+        const input = drawScaled(img, Math.round(W0*s), Math.round(H0*s));
+        setStage('نحمّل الذكاء الاصطناعي…', 0.05); await frame();
+        const up = getUpscaler();
+        setStage('الذكاء الاصطناعي يعيد رسم التفاصيل…', 0.08);
+        const t = await up.upscale(input, {
+          output: 'tensor', patchSize: 128, padding: 8, awaitNextFrame: true,
+          progress: pr => setStage(pr >= 0.999 ? 'نكمل اللمسات الأخيرة…' : 'الذكاء الاصطناعي يعيد رسم التفاصيل… ' + Math.round(pr*100) + '%', 0.08 + pr*0.72)
+        });
+        base = await tensorToCanvas(t);
+        input.width = input.height = 0;
+        setStage('نضبط الألوان والتباين…', 0.82); await frame();
+        autoColor(base);
+        setStage('نزيد الوضوح…', 0.88); await frame();
+        sharpen(base, 0.35);
+      } else {
+        base = drawScaled(img, W0, H0);
+        setStage('نضبط الألوان والتباين…', 0.4); await frame();
+        autoColor(base);
+        setStage('نزيد الوضوح…', 0.6); await frame();
+        sharpen(base, 0.6);
+      }
+      if (img.close) img.close();
+
+      setStage('نكبّر لدقة 8K…', 0.92); await frame();
+      const [tw, th] = targetSize(base.width, base.height);
+      const out = drawScaled(base, tw, th);
+      base.width = base.height = 0;
+
+      setStage('نجهّز الصورة النهائية…', 0.97); await frame();
+      resultBlob = await new Promise(res => out.toBlob(res, 'image/jpeg', 0.92));
+      out.width = out.height = 0;
+      if (!resultBlob) throw new Error('encode');
+
+      if (afterURL) URL.revokeObjectURL(afterURL);
+      afterURL = URL.createObjectURL(resultBlob);
+      $('after').src = afterURL; $('viewer').classList.remove('show-before');
+      $('before').src = beforeURL;
+      const a = label(W0, H0), b = label(tw, th);
+      $('sBefore').textContent = a.size;
+      $('sAfter').innerHTML = b.tag + '<small style="color:#9aa1ad;font-size:12px;margin-top:2px">' + b.size + '</small>';
+      $('msg').textContent = ''; $('msg').className = 'msg';
+      setStage('تم ✨', 1);
+      show('result');
+    } catch (e) {
+      console.error(e);
+      show('pick');
+      $('file').value = '';
+      alertBox('ما قدرنا نحسّن هذي الصورة. جرّب صورة ثانية أو صورة أصغر.');
+    } finally { busy = false; }
+  }
+
+  function alertBox(t) {
+    let el = document.querySelector('.pick span');
+    el.textContent = t; el.classList.add('err');
+    setTimeout(() => { el.textContent = 'نكبّرها لدقة 8K ونضبط الألوان والوضوح تلقائياً'; el.classList.remove('err'); }, 5000);
+  }
+
+  // pick / drop
+  $('file').addEventListener('change', e => run(e.target.files[0]));
+  const drop = $('drop');
+  ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+  drop.addEventListener('drop', e => run(e.dataTransfer.files[0]));
+
+  // tap to compare before / after
+  const v = $('viewer');
+  v.addEventListener('click', () => v.classList.toggle('show-before'));
+
+  // save
+  let downloads = null, dlChecked = false;
+  if (window.claude && claude.use) claude.use('downloads').then(d => { downloads = d; dlChecked = true; }).catch(() => { dlChecked = true; });
+  $('save').addEventListener('click', async () => {
+    if (!resultBlob) return;
+    const name = 'enhanced-8k-' + Date.now() + '.jpg';
+    const N = window.NativeApp;
+    if (N && N.isNative()) {
+      const btn = $('save'); btn.disabled = true; $('msg').textContent = 'نحفظ الصورة…'; $('msg').className = 'msg';
+      try {
+        await N.saveToGallery(resultBlob, name.replace(/\.jpg$/, ''));
+        $('msg').textContent = 'تم حفظ الصورة في معرض الصور ✅';
+      } catch (e) {
+        console.error(e);
+        try { await N.share(resultBlob, name.replace(/\.jpg$/, '')); $('msg').textContent = ''; }
+        catch (e2) { $('msg').textContent = 'ما قدرنا نحفظ الصورة. حاول مرة ثانية.'; $('msg').className = 'msg err'; }
+      } finally { btn.disabled = false; }
+      return;
+    }
+    if (downloads) {
+      try {
+        await downloads.save({ filename: name, data: resultBlob });
+        $('msg').textContent = 'تم حفظ الصورة ✅'; $('msg').className = 'msg';
+      } catch (e) {
+        if (e && e.code === 'declined') { $('msg').textContent = 'ألغيت الحفظ.'; }
+        else { $('msg').textContent = 'ما قدرنا نحفظ من هنا. اضغط مطولاً على الصورة واختر "حفظ الصورة".'; }
+        $('msg').className = 'msg';
+      }
+    } else {
+      // outside the artifact viewer: plain download link
+      try {
+        const a = document.createElement('a'); a.href = afterURL; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        $('msg').textContent = 'إذا ما نزلت الصورة، افتحها واضغط عليها مطولاً واختر "حفظ الصورة".';
+      } catch (e) {}
+    }
+  });
+
+  $('again').addEventListener('click', () => { $('file').value = ''; resultBlob = null; show('pick'); $('file').click(); });
+})();
+</script>
+</body>
+</html>

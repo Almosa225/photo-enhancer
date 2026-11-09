@@ -1,0 +1,6 @@
+{
+  "appId": "com.almosa.photoenhancer",
+  "appName": "محسّن الصور",
+  "webDir": "www",
+  "android": { "allowMixedContent": false }
+}
