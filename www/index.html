@@ -83,6 +83,16 @@
   .stat b.big{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent;font-size:18px}
   .msg{font-size:14px;color:var(--mute);text-align:center;min-height:1em}
   .err{color:#ff8a8a}
+  .tabs{display:flex;background:#15171c;border:1px solid var(--line);border-radius:16px;padding:5px;gap:5px}
+  .tabs button{flex:1;appearance:none;border:0;background:transparent;color:var(--mute);font:inherit;font-weight:700;font-size:16px;padding:11px;border-radius:12px;cursor:pointer}
+  .tabs button.on{background:linear-gradient(135deg,var(--accent),#5b8cff);color:#fff}
+  .tabs button[disabled]{opacity:.5}
+  .mode{display:flex;flex-direction:column;gap:20px}
+  .vbox{position:relative;border-radius:16px;overflow:hidden;background:#000}
+  .vbox video,.vbox canvas{display:block;width:100%;height:auto;max-height:60vh;object-fit:contain;background:#000}
+  .seg{display:flex;gap:8px}
+  .seg button{flex:1;appearance:none;border:1px solid var(--line);background:#0f1115;color:var(--text);font:inherit;font-size:15px;padding:10px;border-radius:12px;cursor:pointer}
+  .seg button.on{border-color:var(--accent);background:#7c5cff22}
   footer{text-align:center;color:#5f6673;font-size:12px}
 </style>
 </head>
@@ -93,8 +103,15 @@
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
     </div>
     <h1>محسّن الصور</h1>
-    <p class="sub">اختر صورة، والباقي علينا</p>
+    <p class="sub">اختر صورة أو فيديو، والباقي علينا</p>
   </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="on" data-mode="img">صورة</button>
+    <button data-mode="vid">فيديو</button>
+  </nav>
+
+  <div class="mode" id="imgMode">
 
   <!-- Step 1: pick -->
   <section class="card" id="pickCard">
@@ -132,8 +149,46 @@
     <div class="msg" id="msg"></div>
     <button class="btn ghost" id="again">صورة جديدة</button>
   </section>
+  </div>
 
-  <footer>كل المعالجة تصير داخل جهازك. ما نرفع صورك لأي مكان.</footer>
+  <div class="mode" id="vidMode" style="display:none">
+    <section class="card" id="vPick">
+      <label class="pick">
+        <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="#9aa1ad" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="15" height="14" rx="3"/><path d="M17 10l5-3v10l-5-3z"/></svg>
+        <b>اختر فيديو</b>
+        <span id="vPickHint">نحسّن الإضاءة والألوان والوضوح، والصوت يبقى مثل ما هو</span>
+        <input type="file" id="vfile" accept="video/*">
+      </label>
+    </section>
+
+    <section class="card result" id="vReady">
+      <div class="vbox"><video id="vSrc" playsinline muted controls></video></div>
+      <div class="stats">
+        <div class="stat"><small>المدة</small><b id="vDur">—</b></div>
+        <div class="stat"><small>الدقة</small><b id="vRes">—</b></div>
+      </div>
+      <button class="btn" id="vGo">حسّن الفيديو ✨</button>
+      <div class="msg" id="vReadyMsg">المعالجة تاخذ تقريباً نفس مدة الفيديو. خلّ الصفحة مفتوحة والشاشة شغالة.</div>
+      <button class="btn ghost" id="vCancel">اختر فيديو ثاني</button>
+    </section>
+
+    <section class="card work" id="vWork">
+      <div class="vbox" id="vPrev" style="width:100%"></div>
+      <div class="stage" id="vStage">نجهّز الفيديو…</div>
+      <div class="bar"><i id="vBar"></i></div>
+      <div class="hint">لا تقفل الشاشة ولا تطلع من الصفحة لين يخلص.</div>
+    </section>
+
+    <section class="card result" id="vResult">
+      <div class="vbox"><video id="vOut" playsinline controls></video></div>
+      <div class="seg"><button id="vShowAfter" class="on">بعد ✨</button><button id="vShowBefore">قبل</button></div>
+      <button class="btn" id="vSave">حفظ الفيديو</button>
+      <div class="msg" id="vMsg"></div>
+      <button class="btn ghost" id="vAgain">فيديو جديد</button>
+    </section>
+  </div>
+
+  <footer>كل المعالجة تصير داخل جهازك. ما نرفع صورك أو مقاطعك لأي مكان.</footer>
 </div>
 
 <script src="lib/tf.min.js"></script>
@@ -141,6 +196,8 @@
 <script src="esrgan.js"></script>
 <script src="native.js"></script>
 <script src="enhance.js"></script>
+<script src="video.js"></script>
+<script src="vidui.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -293,7 +350,7 @@
   async function run(file) {
     if (busy || !file) return;
     if (!/^image\//.test(file.type) && !/\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i.test(file.name)) return;
-    busy = true;
+    busy = true; window.__imgBusy = true;
     markBusy(true);
     $('thumb').removeAttribute('src');
     show('work'); setStage('نجهّز الصورة…', 0.02); await frame();
@@ -377,7 +434,7 @@
       show('pick');
       $('file').value = '';
       alertBox('ما قدرنا نحسّن هذي الصورة. جرّب صورة ثانية أو صورة أصغر.');
-    } finally { busy = false; }
+    } finally { busy = false; window.__imgBusy = false; }
   }
 
   function alertBox(t) {

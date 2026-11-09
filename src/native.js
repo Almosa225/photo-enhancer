@@ -26,9 +26,16 @@ async function getAlbumId() {
 }
 
 async function writeTemp(blob, name) {
-  const data = await blobToBase64(blob);
-  const r = await Filesystem.writeFile({ path: name, data, directory: Directory.Cache });
-  return r.uri;
+  // write in chunks so big videos don't need one giant base64 string in memory
+  const CHUNK = 3 * 1024 * 1024; // multiple of 3 keeps base64 chunks independent
+  let uri = null;
+  for (let off = 0; off < blob.size || off === 0; off += CHUNK) {
+    const data = await blobToBase64(blob.slice(off, off + CHUNK));
+    if (off === 0) uri = (await Filesystem.writeFile({ path: name, data, directory: Directory.Cache })).uri;
+    else await Filesystem.appendFile({ path: name, data, directory: Directory.Cache });
+    if (blob.size === 0) break;
+  }
+  return uri;
 }
 
 window.NativeApp = {
@@ -40,6 +47,18 @@ window.NativeApp = {
     await Media.savePhoto({ path: uri, albumIdentifier, fileName: baseName });
     try { await Filesystem.deleteFile({ path: baseName + '.jpg', directory: Directory.Cache }); } catch (e) {}
     return true;
+  },
+  async saveVideoToGallery(blob, baseName, ext) {
+    const fname = baseName + '.' + (ext || 'mp4');
+    const uri = await writeTemp(blob, fname);
+    const albumIdentifier = await getAlbumId();
+    await Media.saveVideo({ path: uri, albumIdentifier, fileName: baseName });
+    try { await Filesystem.deleteFile({ path: fname, directory: Directory.Cache }); } catch (e) {}
+    return true;
+  },
+  async shareFile(blob, fname) {
+    const uri = await writeTemp(blob, fname);
+    await Share.share({ files: [uri] });
   },
   async share(blob, baseName) {
     const uri = await writeTemp(blob, baseName + '.jpg');
