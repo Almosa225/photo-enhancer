@@ -321,7 +321,29 @@
       setStage('الذكاء الاصطناعي يعيد رسم التفاصيل… 0%', 0.06); await frame();
       base = await RealESRGAN.upscale(input, pr => setStage('الذكاء الاصطناعي يعيد رسم التفاصيل… ' + Math.round(pr*100) + '%', 0.06 + pr*0.66));
       input.width = input.height = 0;
-      const p0 = 0.74;
+
+      // Bring back real texture from the original photo so the result doesn't look painted.
+      // The more real pixels the original has (vs the AI output), the more we blend in.
+      {
+        const r = L0 / Math.max(base.width, base.height);
+        const k = r >= 0.9 ? 0.35 : r <= 0.35 ? 0.12 : 0.12 + (r - 0.35) / 0.55 * 0.23;
+        setStage('نرجّع الملمس الطبيعي…', 0.72); await frame();
+        let img2 = await loadImage(file);
+        const oc = drawScaled(img2, base.width, base.height);
+        if (img2.close) img2.close(); img2 = null;
+        const bctx = base.getContext('2d', { willReadFrequently: true });
+        const bd = bctx.getImageData(0, 0, base.width, base.height);
+        const od = oc.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, base.width, base.height).data;
+        oc.width = oc.height = 0;
+        const p = bd.data, k1 = 1 - k;
+        for (let i = 0; i < p.length; i += 4) {
+          p[i] = p[i] * k1 + od[i] * k;
+          p[i + 1] = p[i + 1] * k1 + od[i + 1] * k;
+          p[i + 2] = p[i + 2] * k1 + od[i + 2] * k;
+        }
+        bctx.putImageData(bd, 0, 0);
+      }
+      const p0 = 0.76;
       {
         const ctx = base.getContext('2d', { willReadFrequently: true });
         const d = ctx.getImageData(0, 0, base.width, base.height);
