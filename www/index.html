@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>محسّن الصور</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="محسّن الصور">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0c0d10">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
@@ -130,16 +137,16 @@
 </div>
 
 <script src="lib/tf.min.js"></script>
-<script src="lib/upscaler.min.js"></script>
-<script src="lib/esrgan-medium-x4.min.js"></script>
-<script src="lib/model-x4.js"></script>
+<script src="lib/esrgan-weights.js"></script>
+<script src="esrgan.js"></script>
 <script src="native.js"></script>
 <script src="enhance.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
   const TARGET_LONG = 7680;   // 8K
-  const AI_MAX_INPUT = 800;   // longest side fed to the AI model (x4 -> 3200)
+  const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const AI_MAX_INPUT = IS_IOS ? 896 : 1024;  // longest side fed to Real-ESRGAN (x4)
   const AI_SKIP_ABOVE = 1200; // camera photos already have the pixels: enhance them directly
   const MAX_WORK_PIXELS = 12e6;
 
@@ -156,7 +163,7 @@
     return upscaler;
   }
   // warm the model in the background so the first photo starts faster
-  setTimeout(() => { try { getUpscaler().getModel && getUpscaler().getModel().catch(()=>{}); } catch(e){} }, 300);
+  setTimeout(() => { try { RealESRGAN.load(); } catch (e) {} }, 400);
 
   const show = which => {
     $('pickCard').style.display = which === 'pick' ? '' : 'none';
@@ -291,31 +298,20 @@
       const W0 = img.width, H0 = img.height, L0 = Math.max(W0, H0);
       let base;
 
-      let p0;
-      if (L0 < AI_SKIP_ABOVE) {
-        // small image: AI upscaling first so there are real pixels to work with
-        const s = Math.min(1, AI_MAX_INPUT / L0);
-        const input = drawScaled(img, Math.round(W0*s), Math.round(H0*s));
-        setStage('نحمّل الذكاء الاصطناعي…', 0.05); await frame();
-        const up = getUpscaler();
-        setStage('الذكاء الاصطناعي يعيد رسم التفاصيل…', 0.08);
-        const t = await up.upscale(input, {
-          output: 'tensor', patchSize: 128, padding: 8, awaitNextFrame: true,
-          progress: pr => setStage(pr >= 0.999 ? 'نكمل اللمسات الأخيرة…' : 'الذكاء الاصطناعي يعيد رسم التفاصيل… ' + Math.round(pr*100) + '%', 0.08 + pr*0.5)
-        });
-        base = await tensorToCanvas(t);
-        input.width = input.height = 0;
-        p0 = 0.6;
-      } else {
-        // camera photo: work at full detail (capped to keep phone memory safe)
-        const s = Math.min(1, Math.sqrt(MAX_WORK_PIXELS / (W0 * H0)));
-        base = drawScaled(img, Math.round(W0*s), Math.round(H0*s));
-        p0 = 0.04;
-      }
+      // Real-ESRGAN on every photo: shrink big camera photos to a size the phone can handle,
+      // then the AI redraws them x4 with clean, sharp detail.
+      const s = Math.min(1, AI_MAX_INPUT / L0);
+      const input = drawScaled(img, Math.round(W0*s), Math.round(H0*s));
+      setStage('نجهّز الذكاء الاصطناعي…', 0.04); await frame();
+      RealESRGAN.load();
+      setStage('الذكاء الاصطناعي يعيد رسم التفاصيل… 0%', 0.06); await frame();
+      base = await RealESRGAN.upscale(input, pr => setStage('الذكاء الاصطناعي يعيد رسم التفاصيل… ' + Math.round(pr*100) + '%', 0.06 + pr*0.66));
+      input.width = input.height = 0;
+      const p0 = 0.74;
       {
         const ctx = base.getContext('2d', { willReadFrequently: true });
         const d = ctx.getImageData(0, 0, base.width, base.height);
-        await PhotoEnhance.enhance(d.data, base.width, base.height, async (label, p) => { setStage(label, p0 + p * (0.9 - p0)); await frame(); });
+        await PhotoEnhance.enhance(d.data, base.width, base.height, async (label, p) => { setStage(label, p0 + p * (0.9 - p0)); await frame(); }, { clarity: 0.3, sharpen: 0.25, denoise: false });
         ctx.putImageData(d, 0, 0);
       }
       if (img.close) img.close();
@@ -401,6 +397,18 @@
         else { $('msg').textContent = 'ما قدرنا نحفظ من هنا. اضغط مطولاً على الصورة واختر "حفظ الصورة".'; }
         $('msg').className = 'msg';
       }
+    } else if (navigator.canShare && navigator.share) {
+      // iPhone / phone browsers: share sheet has "Save Image" -> goes to Photos
+      try {
+        const file = new File([resultBlob], name, { type: 'image/jpeg' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file] });
+          $('msg').textContent = 'اختر "حفظ الصورة" عشان تنحفظ في الصور.'; $('msg').className = 'msg';
+          return;
+        }
+      } catch (e) { if (e && e.name === 'AbortError') return; }
+      const a = document.createElement('a'); a.href = afterURL; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
     } else {
       // outside the artifact viewer: plain download link
       try {
